@@ -6,8 +6,10 @@ import java.io.Serializable;
 · Description: 
 Class that defines the messages exchanged between Client and Replicas, so the requests and the replies, which can be of two types Reads and Writes. The requests from tests are managed by the abstract framework using AbstractClient.ReadRequest and WriteRequest, which trigger the client's mandatory methods. 
 This class implements the network responses:
-1) ReplyRead (Reply of Read) -> Response from replica to client of the read value
-2) ReplyWrite (Reply of Write) -> Response only if the commit happened correctly (WRITE_OK)
+1) ClientRead (Request Read ) -> Request sent from a client to a replica to read a value 
+2) Client Write (Request Write) -> Request sent from a client to a replica to initialize a write routine
+3) ReplyRead (Reply of Read) -> Response from replica to client of the read value
+4) ReplyWrite (Reply of Write) -> Response only if the commit happened correctly (WRITE_OK)
 
 · How to use?
 The Client messages have to be used inside the Client Actor (Client.java), instead the Reply inside the Replica (Replica.java). The class is a fake one, so they will be used as follows:
@@ -21,6 +23,22 @@ These calls are just illustrative and the variables should be adapted to the con
 public class ClientMessages {
     private ClientMessages() {
         //CONSTRUCTOR TO PREVENT INITIALIZATION
+    }
+
+    public static final class ClientRead implements Serializable {
+        public final int index;
+        public ClientRead(int index) {
+            this.index=index;
+        }
+    }
+
+    public static final class ClientWrite implements Serializable {
+        public final int index;
+        public final int value;
+        public ClientWrite(int index, int value) {
+            this.index=index;
+            this.value=value;
+        }
     }
 
     public static final class ReplyRead implements Serializable {
