@@ -60,6 +60,19 @@ public class Replica extends AbstractReplica {
         }
     }
 
+    /*Internal token triggered if the next neighbor in the ring failts to send an Election */
+    public static final class ElectionAckTimeout implements Serializable {
+        public final int expectedAckFromId;
+        public ElectionAckTimeout(int expectedAckFromId) {
+            this.expectedAckFromId=expectedAckFromId;
+        }
+    }
+
+    /*Internal safety token triggered if new coordinator fails to send SYNCHRONIZATION in time */
+    public static final class SyncTimeout implements Serializable {
+        //Just to signal timing token
+    }
+
     @Override
     public int getSystemNumberOfActors() {
         if (this.systemGroup!=null) {
@@ -89,7 +102,8 @@ public class Replica extends AbstractReplica {
     @Override
     public final Receive createReceive() {
         return createBaseReceiveBuilder()
-                // TODO add your message handlers here .match(, )
+                .match(AbstractReplica.InitSystem.class, this::initSystem)
+                //Add other messages here
                 .build();
     }
 
