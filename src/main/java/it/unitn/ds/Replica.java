@@ -20,6 +20,8 @@ public class Replica extends AbstractReplica {
     private boolean crashed;
     private List<ProtocolMessages.UPDATE> history;
     private Map<Integer, Integer> ackCounts;
+    private AbstractReplica.Crash crashConfig;
+    private int crashCounter;
     //Constructors
     public Replica(int id) {
         this(id, AbstractReplica.MIN_LATENCY, AbstractReplica.MAX_LATENCY, AbstractReplica.COORDINATOR_BEAT_INTERVAL, Optional.empty());
@@ -88,7 +90,28 @@ public class Replica extends AbstractReplica {
 
     @Override
     public void crash(AbstractReplica.Crash how_to_crash) {
-        // TODO: implement
+        this.crashConfig=how_to_crash;
+        this.crashCounter=how_to_crash.after_n_messages_of_type;
+        System.out.println("[Replica " + this.id + "] CRASH CONFIGURATION RECV: Type=" + how_to_crash.type + " Countdown=" + this.crashCounter);
+        if(how_to_crash.type==Crash.Type.Now) {
+            executeCrash();
+        }
+    }
+
+    void executeCrash() {
+        this.crashed=true;
+        System.out.println("[Replica "+this.id + " ] CRASHED Changing behavior no more RECV");
+        getContext().become(createBaseReceiveBuilder().build());
+    }
+
+    void verifyCrash(Crash.Type currentMessType) {
+        if(this.crashConfig!=null && this.crashConfig.type==currentMessType) {
+            this.crashCounter--;
+            System.out.println("[Replica " + this.id + "] Crash countdown decremented for " + currentMessType + ". Remaining: " + this.crashCounter);
+            if(this.crashCounter==0) {
+                executeCrash();
+            }
+        }
     }
 
     @Override
@@ -103,7 +126,9 @@ public class Replica extends AbstractReplica {
         this.seq=0;
         this.crashed=false;
         this.history=new ArrayList<>();
-        ackCounts=new HashMap<>();
+        this.ackCounts=new HashMap<>();
+        this.crashConfig=null;
+        this.crashCounter=0;
         System.out.println("Replica " + this.id + " started correctly. Current Coordinator ID: " + this.currentCoordinatorId);
     }
 
@@ -179,9 +204,11 @@ public class Replica extends AbstractReplica {
     }
 
     private void onUpdate(ProtocolMessages.UPDATE msg) {
+        verifyCrash(Crash.Type.Update);
         if(this.crashed) {
             return;
         }
+        
         System.out.println("[Replica " + this.id + "] RECV UPDATE command");
         this.history.add(new ProtocolMessages.UPDATE(msg.epoch, msg.seq, msg.index, msg.value, msg.clientRef));
         ActorRef coordinatorRef=this.systemGroup.get(this.currentCoordinatorId);
@@ -207,6 +234,7 @@ public class Replica extends AbstractReplica {
     }
 
     private void onWriteOk(ProtocolMessages.WRITE_OK msg) {
+        verifyCrash(Crash.Type.WriteOK);
         if(this.crashed) {
             return;
         }
