@@ -1,6 +1,7 @@
 # Work Division
 
 Matteo
+
 - [ ] **Setup and Message Classes Definion** -> Initialize Replica.java and mapping the setup methods + class of messages (ClientRead, ClientWrite ...) 
 - [ ] **Response of Read Normal State** -> Response immediate and synchronous of clients on local array of the replicas
 - [ ] **Write Pipeline** -> Normal behavior when a write is issued
