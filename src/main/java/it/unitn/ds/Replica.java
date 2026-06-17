@@ -3,10 +3,11 @@ package it.unitn.ds;
 import akka.actor.ActorRef;
 import akka.actor.Props;
 
+import java.io.Serializable;
 import java.util.Optional;
 
 public class Replica extends AbstractReplica {
-
+    //Constructors
     public Replica(int id) {
         this(id, AbstractReplica.MIN_LATENCY, AbstractReplica.MAX_LATENCY, AbstractReplica.COORDINATOR_BEAT_INTERVAL, Optional.empty());
     }
