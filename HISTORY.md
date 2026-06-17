@@ -14,6 +14,15 @@ SETUP:
     - [x] ElectionAck (immediate response of a replica that sends to the previous on the ring to confirm receiving of election message) and ElectionAckTimeout (local timer that triggers if the connected cohort doesn't respond with ACK, signaling crashing and that should be skipped)
     - [x] SyncTimeout (timer of waiting completion of sync)
     - [x] Synchronization (message sent to new coordinator elected in broadcast to all to align histories with missing updates)
+- [x] Create methods in replica that correspond to a standard write path for a replica and connect those to createReceive
+- [x] Implement the various methods:
+    - [x] onClientRead
+    - [x] onClientWrite
+    - [x] onWriteForward
+    - [x] onUpdate
+    - [x] onAck
+    - [x] onWriteOk
+- [x] Crash Methods implementation and managed cased related to Normal Path (Update and WriteOK crashes)
 
 **Davide**
 - [ ] Implementation of Client
