@@ -8,7 +8,6 @@ import akka.actor.ActorSystem;
 import it.unitn.ds.AbstractReplica.InitSystem;
 
 public class Main {
-
     public static void main(String[] args) {
         System.out.println("========================================");
         System.out.println("START");
@@ -35,6 +34,31 @@ public class Main {
         for (Map.Entry<Integer, ActorRef> entry : replicas.entrySet()) {
             entry.getValue().tell(initMsg, ActorRef.noSender());
         }
+        //SIMULATE WRITE PIPELINE
+        try {
+            Thread.sleep(1000);
+        }
+        catch(InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        System.out.println("\n[TEST] Simulate Client writing value 42 at index 0 via replica 2...");
+        ClientMessages.ClientWrite fakeWrite=new ClientMessages.ClientWrite(0, 42);
+        replicas.get(2).tell(fakeWrite, ActorRef.noSender());
+        try {
+            Thread.sleep(3000);
+        }
+        catch(InterruptedException e) {
+            e.printStackTrace();
+        }
+        //SIMULATE READ
+        System.out.println("\n[TEST] Simulating Client reading index 0 from Replica 1...");
+        ClientMessages.ClientRead fakeRead=new ClientMessages.ClientRead(0);
+        replicas.get(1).tell(fakeRead, ActorRef.noSender());
+        try {
+            Thread.sleep(1000);
+        }
+        catch(InterruptedException e) {}
 
         // TODO: Create your clients
         

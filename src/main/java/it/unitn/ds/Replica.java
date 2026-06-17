@@ -7,6 +7,8 @@ import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.List;
+import java.util.ArrayList;
 
 public class Replica extends AbstractReplica {
     //Variables
@@ -15,6 +17,9 @@ public class Replica extends AbstractReplica {
     private int[] positions;
     private int currentCoordinatorId;
     private Map<Integer, ActorRef> systemGroup;
+    private boolean crashed;
+    private List<ProtocolMessages.UPDATE> history;
+    private Map<Integer, Integer> ackCounts;
     //Constructors
     public Replica(int id) {
         this(id, AbstractReplica.MIN_LATENCY, AbstractReplica.MAX_LATENCY, AbstractReplica.COORDINATOR_BEAT_INTERVAL, Optional.empty());
@@ -96,6 +101,9 @@ public class Replica extends AbstractReplica {
         }
         this.epoch=0;
         this.seq=0;
+        this.crashed=false;
+        this.history=new ArrayList<>();
+        ackCounts=new HashMap<>();
         System.out.println("Replica " + this.id + " started correctly. Current Coordinator ID: " + this.currentCoordinatorId);
     }
 
@@ -103,8 +111,123 @@ public class Replica extends AbstractReplica {
     public final Receive createReceive() {
         return createBaseReceiveBuilder()
                 .match(AbstractReplica.InitSystem.class, this::initSystem)
+                .match(ClientMessages.ClientRead.class, this::onClientRead)
+                .match(ClientMessages.ClientWrite.class, this::onClientWrite)
+                .match(ProtocolMessages.WRITE_FORWARD.class, this::onWriteForward)
+                .match(ProtocolMessages.UPDATE.class, this::onUpdate)
+                .match(ProtocolMessages.ACK.class, this::onAck)
+                .match(ProtocolMessages.WRITE_OK.class, this::onWriteOk)
                 //Add other messages here
                 .build();
     }
 
+    private void onClientRead(ClientMessages.ClientRead msg) {
+        if(this.crashed) {
+            return;
+        }
+        int localValue=this.positions[msg.index];
+        System.out.println("[Replica " + this.id + "] RECV READ_REQUEST. Reply value: " + localValue +"\n");
+        this.tell(new ClientMessages.ReplyRead(localValue, msg.index, this.id), getSender());
+    }
+
+    private void broadcast(Serializable msg) {
+        if(this.crashed) {
+            return;
+        }
+        for(ActorRef replicaRef : this.systemGroup.values()) {
+            this.tell(msg, replicaRef);
+        }
+    }
+
+    private void writeForwardToCoordinator(int index, int value, ActorRef clientRef) {
+        ActorRef coordinatorRef=this.systemGroup.get(this.currentCoordinatorId);
+        if(coordinatorRef!=null) {
+            System.out.println("[Replica " + this.id + "] Forwarding write to Coordinator " + this.currentCoordinatorId);
+            this.tell(new ProtocolMessages.WRITE_FORWARD(index, value, clientRef), coordinatorRef);
+        }
+    }
+
+    private void coordinatorWritePipeline(int index, int value, ActorRef clientRef) {
+        this.seq++;
+        ProtocolMessages.UPDATE pendingUpdate=new ProtocolMessages.UPDATE(this.epoch, this.seq, index, value, clientRef);
+        this.history.add(pendingUpdate);
+        this.ackCounts.put(this.seq, 0);
+        System.out.println("[Coordinator " + this.id + "] UPDATE for seq " + this.seq + " (val: " + value + ")");
+        broadcast(new ProtocolMessages.UPDATE(this.epoch, this.seq, index, value, clientRef));
+    }
+
+    private void onClientWrite(ClientMessages.ClientWrite msg) {
+        if(this.crashed) {
+            return;
+        }
+        System.out.println("[Replica " + this.id + "] RECV WRITE_REQUEST");
+        if(this.id!=this.currentCoordinatorId) {
+            writeForwardToCoordinator(msg.index, msg.value, getSender());
+            return;
+        }
+        coordinatorWritePipeline(msg.index, msg.value, getSender());
+    }
+
+    private void onWriteForward(ProtocolMessages.WRITE_FORWARD msg) {
+        if(this.crashed) {
+            return;
+        }
+        System.out.println("[Replica " + this.id + "] RECV WRITE_FORWARD");
+        if(this.id==this.currentCoordinatorId) {
+            coordinatorWritePipeline(msg.index, msg.value, msg.clientRef);
+        }
+    }
+
+    private void onUpdate(ProtocolMessages.UPDATE msg) {
+        if(this.crashed) {
+            return;
+        }
+        System.out.println("[Replica " + this.id + "] RECV UPDATE command");
+        this.history.add(new ProtocolMessages.UPDATE(msg.epoch, msg.seq, msg.index, msg.value, msg.clientRef));
+        ActorRef coordinatorRef=this.systemGroup.get(this.currentCoordinatorId);
+        if(coordinatorRef!=null) {
+            System.out.println("[Replica " + this.id + "] UPDATE seq " + msg.seq + ", sending ACK");
+            this.tell(new ProtocolMessages.ACK(msg.epoch, msg.seq, this.id), coordinatorRef);
+        }
+    }
+
+    private void onAck(ProtocolMessages.ACK msg) { 
+        if(this.crashed || this.id!=this.currentCoordinatorId) {
+            return;
+        }
+        System.out.println("[Replica " + this.id + "] RECV ACK");
+        int currentCount=this.ackCounts.getOrDefault(msg.seq, 0)+1;
+        this.ackCounts.put(msg.seq, currentCount);
+        int quorumThres=(this.systemGroup.size()/2)+1;
+        System.out.println("[Coordinator " + this.id + "] RECV ACK for seq " + msg.seq + ". Current: " + currentCount+"/"+quorumThres);
+        if (currentCount==quorumThres) {
+            System.out.println("[Coordinator " + this.id + "] Quorum reached for seq " + msg.seq + ". Start Broadcast WRITE_OK");
+            broadcast(new ProtocolMessages.WRITE_OK(msg.epoch, msg.seq));
+        }
+    }
+
+    private void onWriteOk(ProtocolMessages.WRITE_OK msg) {
+        if(this.crashed) {
+            return;
+        }
+        System.out.println("[Replica " + this.id + "] RECV WRITE_OK for epoch " + msg.epoch + " and seq " + msg.seq);
+        ProtocolMessages.UPDATE matchingUpdate=null;
+        for(ProtocolMessages.UPDATE u : this.history) {
+            if(u.epoch==msg.epoch && u.seq==msg.seq) {
+                matchingUpdate=u;
+                break;
+            }
+        }
+        if(matchingUpdate!=null) {
+            this.positions[matchingUpdate.index]=matchingUpdate.value;
+            System.out.println("[Replica " + this.id + "] UPDATE applied to positions [" + matchingUpdate.index + "]="+matchingUpdate.value);
+            this.callbackOnUpdateApplied(matchingUpdate.index, matchingUpdate.value);
+            if(matchingUpdate.clientRef!=null && matchingUpdate.clientRef!=getContext().getSystem().deadLetters()) {
+                this.tell(new ClientMessages.ReplyWrite(true, matchingUpdate.index, matchingUpdate.value, this.id), matchingUpdate.clientRef);
+            }
+        }
+        else {
+            System.out.println("[Replica " + this.id + "] WARNING: No match update found for seq " + msg.seq);
+        }
+    }
 }
