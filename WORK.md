@@ -3,9 +3,9 @@
 Matteo
 
 - [x] **Setup and Message Classes Definion** -> Initialize Replica.java and mapping the setup methods + class of messages (ClientRead, ClientWrite ...) 
-- [ ] **Response of Read Normal State** -> Response immediate and synchronous of clients on local array of the replicas
-- [ ] **Write Pipeline** -> Normal behavior when a write is issued
-- [ ] **Status Update** -> WRITEOK (callbackOnUpdateApplied)
+- [x] **Response of Read Normal State** -> Response immediate and synchronous of clients on local array of the replicas
+- [x] **Write Pipeline** -> Normal behavior when a write is issued
+- [x] **Status Update** -> WRITEOK (callbackOnUpdateApplied)
 
 Davide
 - [ ] **Client Definition** -> Handle requests sending, planning and crash management (timeout of read and write via Scheduler) Client.java???

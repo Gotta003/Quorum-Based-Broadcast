@@ -4,6 +4,9 @@
 
 **Matteo**
 - [x] Logs clearness and adjusting some minor logic, like abort unnecessary ACKs and making more clear the communications who sends and who receives
+- [x] Bombing Test 3 write forward to see the robustness of the code
+- [x] Adjust log format of replicas and conversion to debug
+- [x] Comment out what implemented
 
 ## DAY ONE (17/06)
 

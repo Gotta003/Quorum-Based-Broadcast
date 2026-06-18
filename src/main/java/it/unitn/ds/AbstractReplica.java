@@ -346,13 +346,14 @@ public abstract class AbstractReplica extends AbstractActor {
      * @param index the position index that was updated
      * @param value the new value written at that index
      */
-    final void callbackOnUpdateApplied(int index, int value, int coordinator_id) {
+    final void callbackOnUpdateApplied(int epoch, int seq, int index, int value, int coordinator_id) {
         if(this.id==coordinator_id) {
-            log("[COORDINATOR] UPDATE APPLIED index=" + index + " value=" + value);
+            debug("[COORDINATOR] UPDATE APPLIED index=" + index + " value=" + value);
         }
         else {
-            log("UPDATE APPLIED index=" + index + " value=" + value);
+            debug("UPDATE APPLIED index=" + index + " value=" + value);
         }
+        log("applied update " + epoch + ":" + seq + " (" + index + ", " + value + ")");
         listener.ifPresent(l -> l.tell(new UpdateApplied(this.id, index, value), getSelf()));
     }
 
