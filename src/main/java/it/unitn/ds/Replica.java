@@ -146,28 +146,78 @@ public class Replica extends AbstractReplica {
                 .build();
     }
 
+    private void applyLocalUpdate(int epoch, int seq) {
+        if(this.crashed) {
+            return;
+        }
+        boolean coordinator=false;
+        if(this.id==currentCoordinatorId) {
+            coordinator=true;
+        }
+        ProtocolMessages.UPDATE matchingUpdate=null;
+        for(ProtocolMessages.UPDATE u : this.history) {
+            if(u.epoch==epoch && u.seq==seq) {
+                matchingUpdate=u;
+                break;
+            }
+        }
+        if(matchingUpdate!=null) {
+            this.positions[matchingUpdate.index]=matchingUpdate.value;
+            if(coordinator) {
+                log("[COORDINATOR] UPDATE TO BE APPLIED to positions [" + matchingUpdate.index + "]="+matchingUpdate.value);
+            }
+            else {
+                log("UPDATE TO BE APPLIED to positions [" + matchingUpdate.index + "]="+matchingUpdate.value);
+            }
+            this.callbackOnUpdateApplied(matchingUpdate.index, matchingUpdate.value, this.currentCoordinatorId);
+            if(matchingUpdate.clientRef!=null && matchingUpdate.clientRef!=getContext().getSystem().deadLetters()) {
+                this.tell(new ClientMessages.ReplyWrite(true, matchingUpdate.index, matchingUpdate.value, this.id), matchingUpdate.clientRef);
+            }
+        }
+        else {
+            if(coordinator) {
+                log("[COORDINATOR] [WARNING] No match update found for seq " + seq);
+            }
+            else {
+                log("[WARNING] No match update found for seq " + seq);
+            }
+        }
+    }
+
     private void onClientRead(ClientMessages.ClientRead msg) {
         if(this.crashed) {
             return;
         }
         int localValue=this.positions[msg.index];
-        System.out.println("[Replica " + this.id + "] RECV READ_REQUEST. Reply value: " + localValue +"\n");
+        log("RECV READ_REQUEST from Client " + msg.index + ". Reply value: " + localValue +"\n");
         this.tell(new ClientMessages.ReplyRead(localValue, msg.index, this.id), getSender());
     }
 
-    private void broadcast(Serializable msg) {
+    private void broadcast(Serializable msg, String type) {
         if(this.crashed) {
             return;
         }
-        for(ActorRef replicaRef : this.systemGroup.values()) {
-            this.tell(msg, replicaRef);
+        boolean coordinator=false;
+        if(this.id==currentCoordinatorId) {
+            coordinator=true;
+        }
+        for(Map.Entry<Integer, ActorRef>  entry : this.systemGroup.entrySet()) {
+            if(entry.getKey()!=this.id) {
+                if(coordinator) {
+                    log("[COORDINATOR] SEND " + type + " to Replica_" + entry.getKey());
+                }
+                else {
+                    log("SEND " + type + " to Replica_" + entry.getKey());
+                }
+                this.tell(msg, entry.getValue());
+            }
         }
     }
 
     private void writeForwardToCoordinator(int index, int value, ActorRef clientRef) {
         ActorRef coordinatorRef=this.systemGroup.get(this.currentCoordinatorId);
         if(coordinatorRef!=null) {
-            System.out.println("[Replica " + this.id + "] Forwarding write to Coordinator " + this.currentCoordinatorId);
+            log("WRITE_FORWARD to Coordinator " + this.currentCoordinatorId);
             this.tell(new ProtocolMessages.WRITE_FORWARD(index, value, clientRef), coordinatorRef);
         }
     }
@@ -176,16 +226,16 @@ public class Replica extends AbstractReplica {
         this.seq++;
         ProtocolMessages.UPDATE pendingUpdate=new ProtocolMessages.UPDATE(this.epoch, this.seq, index, value, clientRef);
         this.history.add(pendingUpdate);
-        this.ackCounts.put(this.seq, 0);
-        System.out.println("[Coordinator " + this.id + "] UPDATE for seq " + this.seq + " (val: " + value + ")");
-        broadcast(new ProtocolMessages.UPDATE(this.epoch, this.seq, index, value, clientRef));
+        this.ackCounts.put(this.seq, 1);
+        log("[COORDINATOR] BROADCAST UPDATE for seq " + this.seq + " (val: " + value + ")");
+        broadcast(new ProtocolMessages.UPDATE(this.epoch, this.seq, index, value, clientRef), "UPDATE");
     }
 
     private void onClientWrite(ClientMessages.ClientWrite msg) {
         if(this.crashed) {
             return;
         }
-        System.out.println("[Replica " + this.id + "] RECV WRITE_REQUEST");
+        log("RECV WRITE_REQUEST from Client " + msg.index);
         if(this.id!=this.currentCoordinatorId) {
             writeForwardToCoordinator(msg.index, msg.value, getSender());
             return;
@@ -197,7 +247,7 @@ public class Replica extends AbstractReplica {
         if(this.crashed) {
             return;
         }
-        System.out.println("[Replica " + this.id + "] RECV WRITE_FORWARD");
+        log("[COORDINATOR] RECV WRITE_FORWARD from " + getSender().path().name());
         if(this.id==this.currentCoordinatorId) {
             coordinatorWritePipeline(msg.index, msg.value, msg.clientRef);
         }
@@ -209,11 +259,11 @@ public class Replica extends AbstractReplica {
             return;
         }
         
-        System.out.println("[Replica " + this.id + "] RECV UPDATE command");
+        log("RECV UPDATE from " + getSender().path().name());
         this.history.add(new ProtocolMessages.UPDATE(msg.epoch, msg.seq, msg.index, msg.value, msg.clientRef));
         ActorRef coordinatorRef=this.systemGroup.get(this.currentCoordinatorId);
         if(coordinatorRef!=null) {
-            System.out.println("[Replica " + this.id + "] UPDATE seq " + msg.seq + ", sending ACK");
+            log("UPDATE seq " + msg.seq + ", sending ACK to Coordinator " + this.currentCoordinatorId);
             this.tell(new ProtocolMessages.ACK(msg.epoch, msg.seq, this.id), coordinatorRef);
         }
     }
@@ -222,14 +272,18 @@ public class Replica extends AbstractReplica {
         if(this.crashed || this.id!=this.currentCoordinatorId) {
             return;
         }
-        System.out.println("[Replica " + this.id + "] RECV ACK");
+        if(!this.ackCounts.containsKey(msg.seq)) {
+            return;
+        }
         int currentCount=this.ackCounts.getOrDefault(msg.seq, 0)+1;
         this.ackCounts.put(msg.seq, currentCount);
         int quorumThres=(this.systemGroup.size()/2)+1;
-        System.out.println("[Coordinator " + this.id + "] RECV ACK for seq " + msg.seq + ". Current: " + currentCount+"/"+quorumThres);
+        log("[COORDINATOR] RECV ACK for seq " + msg.seq + " from " + getSender().path().name() + ". Current: " + currentCount+"/"+quorumThres);
         if (currentCount==quorumThres) {
-            System.out.println("[Coordinator " + this.id + "] Quorum reached for seq " + msg.seq + ". Start Broadcast WRITE_OK");
-            broadcast(new ProtocolMessages.WRITE_OK(msg.epoch, msg.seq));
+            applyLocalUpdate(msg.epoch, msg.seq);
+            log("[COORDINATOR] Quorum reached for seq " + msg.seq + ". Start Broadcast WRITE_OK");
+            broadcast(new ProtocolMessages.WRITE_OK(msg.epoch, msg.seq), "WRITE_OK");
+            this.ackCounts.remove(msg.seq);
         }
     }
 
@@ -238,24 +292,7 @@ public class Replica extends AbstractReplica {
         if(this.crashed) {
             return;
         }
-        System.out.println("[Replica " + this.id + "] RECV WRITE_OK for epoch " + msg.epoch + " and seq " + msg.seq);
-        ProtocolMessages.UPDATE matchingUpdate=null;
-        for(ProtocolMessages.UPDATE u : this.history) {
-            if(u.epoch==msg.epoch && u.seq==msg.seq) {
-                matchingUpdate=u;
-                break;
-            }
-        }
-        if(matchingUpdate!=null) {
-            this.positions[matchingUpdate.index]=matchingUpdate.value;
-            System.out.println("[Replica " + this.id + "] UPDATE applied to positions [" + matchingUpdate.index + "]="+matchingUpdate.value);
-            this.callbackOnUpdateApplied(matchingUpdate.index, matchingUpdate.value);
-            if(matchingUpdate.clientRef!=null && matchingUpdate.clientRef!=getContext().getSystem().deadLetters()) {
-                this.tell(new ClientMessages.ReplyWrite(true, matchingUpdate.index, matchingUpdate.value, this.id), matchingUpdate.clientRef);
-            }
-        }
-        else {
-            System.out.println("[Replica " + this.id + "] WARNING: No match update found for seq " + msg.seq);
-        }
+        log("RECV WRITE_OK for epoch " + msg.epoch + " and seq " + msg.seq + " from " + getSender().path().name());
+        applyLocalUpdate(msg.epoch, msg.seq);
     }
 }

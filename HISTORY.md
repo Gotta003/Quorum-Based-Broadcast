@@ -1,9 +1,13 @@
 # Day by Day
 
+## DAY TWO (18/06)
+
+**Matteo**
+- [x] Logs clearness and adjusting some minor logic, like abort unnecessary ACKs and making more clear the communications who sends and who receives
+
 ## DAY ONE (17/06)
 
 **Matteo**
-SETUP:
 - [x] Define message classes: 
     - [x] Client Messages to communicate: ClientRead, ClientWrite, ReadReply, WriteReply (implemented in `ClientMessages.java`)
     - [x] Protocol Messages to coordinate: WriteForward, Update, Ack, WriteOK (implemented in `ProtocolMessages.java`)
@@ -23,6 +27,5 @@ SETUP:
     - [x] onAck
     - [x] onWriteOk
 - [x] Crash Methods implementation and managed cased related to Normal Path (Update and WriteOK crashes)
-
-**Davide**
-- [ ] Implementation of Client
+- [x] Create a Fake Write request with no client since they have to be implemented
+- [x] Create a Fake Read request

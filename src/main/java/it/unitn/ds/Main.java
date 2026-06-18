@@ -52,9 +52,12 @@ public class Main {
             e.printStackTrace();
         }
         //SIMULATE READ
-        System.out.println("\n[TEST] Simulating Client reading index 0 from Replica 1...");
+        System.out.println("\n[TEST] Simulating Client reading index 0 from all replicas");
         ClientMessages.ClientRead fakeRead=new ClientMessages.ClientRead(0);
+        replicas.get(0).tell(fakeRead, ActorRef.noSender());
         replicas.get(1).tell(fakeRead, ActorRef.noSender());
+        replicas.get(2).tell(fakeRead, ActorRef.noSender());
+        replicas.get(3).tell(fakeRead, ActorRef.noSender());
         try {
             Thread.sleep(1000);
         }
