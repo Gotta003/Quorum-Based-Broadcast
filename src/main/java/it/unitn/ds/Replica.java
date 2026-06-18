@@ -7,35 +7,63 @@ import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.List;
+import java.util.ArrayList;
 
+/**
+ * Replica node implementation that implements a replication protocol with multi-agent handling, deterministic fault
+ * injection and crash-recovery routine 
+ * The class is divided in the following categories:
+ * 1) Variables
+ * 2) Constructor & Props
+ * 3) Internal Messages (HEARTBEAT class) & Tokens
+ * 4) Initialization & Status
+ * 5) Client Module
+ * 6) Normal Write Module
+ * 7) Fault Module
+ * 8) Heartbeat Implementation & Leader Election
+ */
 public class Replica extends AbstractReplica {
-    //Variables
+    //
+    //  VARIABLES
+    //
     private int epoch;
     private int seq;
     private int[] positions;
     private int currentCoordinatorId;
     private Map<Integer, ActorRef> systemGroup;
-    //Constructors
+    private boolean crashed;
+    private List<ProtocolMessages.UPDATE> history;
+    private Map<Integer, Integer> ackCounts;
+    private AbstractReplica.Crash crashConfig;
+    private int crashCounter;
+
+    //
+    //  CONSTRUCTORS & PROPS
+    //
     public Replica(int id) {
         this(id, AbstractReplica.MIN_LATENCY, AbstractReplica.MAX_LATENCY, AbstractReplica.COORDINATOR_BEAT_INTERVAL, Optional.empty());
     }
 
     public Replica(int id, int minLatency, int maxLatency, int coordinatorBeatInterval, Optional<ActorRef> listener) {
         super(id, minLatency, maxLatency, coordinatorBeatInterval, listener);
-        // TODO: implement
+        // The implementation is inherit the framework initialization in initSystem override
     }
 
     public static Props props(int id, int minLatency, int maxLatency, int coordinatorBeatInterval) {
         return Props.create(Replica.class, () -> new Replica(id, minLatency, maxLatency, coordinatorBeatInterval, Optional.empty()));
     }
 
-    // Props method for automated tests
     public static Props propsWithListener(int id, int minLatency, int maxLatency, int coordinatorBeatInterval, ActorRef listener) {
         return Props.create(Replica.class, () -> new Replica(id, minLatency, maxLatency, coordinatorBeatInterval, Optional.ofNullable(listener)));
     }
 
-    /*HEARTBEAT SIGNAL IMPLEMENTATION for control + timeout*/
-    /*Network message sent periodically by coordinator to all cohort replicas*/
+    //
+    //  INTERNAL MESSAGES (HEARTBEAT CLASS) AND TOKENS
+    //
+    /**
+     * Network Message sent periodically by the coordinator to all other replicas to tell them that it is alive
+     */
     public static final class Heartbeat implements Serializable {
         public final int coordinatorId;
         public Heartbeat(int coordinatorId) {
@@ -43,12 +71,19 @@ public class Replica extends AbstractReplica {
         }
     }
 
-    /*Internal token as a local timer trigger. Replicas will schedule this message periodically via Scheduler to check if coordinator heartbeat has timed out*/
+    /**
+     * Internal token acting as a local trigger. Replicas will schedule this message periodically via scheduler
+     * to check if coordinator heartbeat has timed out
+    */
     public static final class HeartbeatTimeoutCheck implements Serializable {
         //Used only as signaling
     }
 
-    /*Internal token scheduled by a replica after a WRITE_FORWARD. If UPDATE broadcast is not received within the timeout window, this message should trigger crash routine*/
+    /**
+     * Internal token scheduled by a replica right after sending a WRITE_FORWARD message. If the UPDATE broadcast
+     * is not received within the maximum latency window plus tolerance, this message triggers suspicion and then
+     * the election algorithm
+     */
     public static final class WriteForwardTimeout implements Serializable {
         public final int index;
         public final int value;
@@ -60,7 +95,10 @@ public class Replica extends AbstractReplica {
         }
     }
 
-    /*Internal token triggered if the next neighbor in the ring failts to send an Election */
+    /**
+     * Internal safety token triggered if the next alive neighbor inside Ring structure fails to respond to an ongoing
+     * ELECTION sequence
+     */
     public static final class ElectionAckTimeout implements Serializable {
         public final int expectedAckFromId;
         public ElectionAckTimeout(int expectedAckFromId) {
@@ -68,11 +106,16 @@ public class Replica extends AbstractReplica {
         }
     }
 
-    /*Internal safety token triggered if new coordinator fails to send SYNCHRONIZATION in time */
+    /**
+     * Internal safety token triggered if the new elected coordinator fails to broadcast SYNCHRONIZATION block in time
+     */
     public static final class SyncTimeout implements Serializable {
         //Just to signal timing token
     }
 
+    //
+    //  INITIALIZATION AND STATUS
+    //
     @Override
     public int getSystemNumberOfActors() {
         if (this.systemGroup!=null) {
@@ -81,11 +124,9 @@ public class Replica extends AbstractReplica {
         return 0;
     }
 
-    @Override
-    public void crash(AbstractReplica.Crash how_to_crash) {
-        // TODO: implement
-    }
-
+    /**
+     * Initialize state of the replica and set data arrays to 0
+     */
     @Override
     public void initSystem(InitSystem sysInit) {
         this.systemGroup=new HashMap<>(sysInit.group);
@@ -96,15 +137,291 @@ public class Replica extends AbstractReplica {
         }
         this.epoch=0;
         this.seq=0;
-        System.out.println("Replica " + this.id + " started correctly. Current Coordinator ID: " + this.currentCoordinatorId);
+        this.crashed=false;
+        this.history=new ArrayList<>();
+        this.ackCounts=new HashMap<>();
+        this.crashConfig=null;
+        this.crashCounter=0;
+        // TODO: Initialize here the new variables declared
+        debug("INITIALIZED. Current Coordinator ID: " + this.currentCoordinatorId);
     }
 
+    /**
+     * Configure channels associated to any class respect to the method handler
+     */
     @Override
     public final Receive createReceive() {
         return createBaseReceiveBuilder()
                 .match(AbstractReplica.InitSystem.class, this::initSystem)
-                //Add other messages here
+                .match(ClientMessages.ClientRead.class, this::onClientRead)
+                .match(ClientMessages.ClientWrite.class, this::onClientWrite)
+                .match(ProtocolMessages.WRITE_FORWARD.class, this::onWriteForward)
+                .match(ProtocolMessages.UPDATE.class, this::onUpdate)
+                .match(ProtocolMessages.ACK.class, this::onAck)
+                .match(ProtocolMessages.WRITE_OK.class, this::onWriteOk)
+                // TODO: Add the other signals and timeouts placeholders and implemented functions
                 .build();
     }
 
+    //
+    //  CLIENT MODULE
+    //
+    /**
+     * Immediate response sending to client the value present in required index
+     * @param msg ClientRead Message (Request of reading coming from a client)
+     */
+    private void onClientRead(ClientMessages.ClientRead msg) {
+        if(this.crashed) {
+            return;
+        }
+        int localValue=this.positions[msg.index];
+        debug("RECV READ_REQUEST from Client " + msg.index + ". Reply value: " + localValue +"\n");
+        this.tell(new ClientMessages.ReplyRead(localValue, msg.index, this.id), getSender());
+    }
+
+    /**
+     * Handle write request of the client and starts the pipeline if it is the leader or writes forward if part
+     * of the cohort
+     * @param msg ClientWrite Message (Request of writing coming from a client)
+     */
+    private void onClientWrite(ClientMessages.ClientWrite msg) {
+        if(this.crashed) {
+            return;
+        }
+        debug("RECV WRITE_REQUEST from Client " + msg.index);
+        if(this.id!=this.currentCoordinatorId) {
+            writeForwardToCoordinator(msg.index, msg.value, getSender());
+            return;
+        }
+        coordinatorWritePipeline(msg.index, msg.value, getSender());
+    }
+
+    /**
+     * Helper to pack original sender and forward the request to coordinator
+     * @param index Client index
+     * @param value Value to forward
+     * @param clientRef Reference to client Actor
+     */
+    private void writeForwardToCoordinator(int index, int value, ActorRef clientRef) {
+        ActorRef coordinatorRef=this.systemGroup.get(this.currentCoordinatorId);
+        if(coordinatorRef!=null) {
+            debug("WRITE_FORWARD to Coordinator " + this.currentCoordinatorId);
+            this.tell(new ProtocolMessages.WRITE_FORWARD(index, value, clientRef), coordinatorRef);
+            // TODO Implement timeout write forward
+            //getContext().getSystem().scheduler().scheduleOnce(...)
+        }
+    }
+
+    //
+    //  MODULE WRITE PATH (NORMAL PATH)
+    //
+    /**
+     * Leader assigns the sequence progressively, saves in the local log and performs a broadcast
+     * @param index Client index
+     * @param value Value to broadcast
+     * @param clientRef Reference to client Actor
+     */
+    private void coordinatorWritePipeline(int index, int value, ActorRef clientRef) {
+        this.seq++;
+        ProtocolMessages.UPDATE pendingUpdate=new ProtocolMessages.UPDATE(this.epoch, this.seq, index, value, clientRef);
+        this.history.add(pendingUpdate);
+        this.ackCounts.put(this.seq, 1);
+        debug("[COORDINATOR] BROADCAST UPDATE for seq " + this.seq + " (val: " + value + ")");
+        broadcast(new ProtocolMessages.UPDATE(this.epoch, this.seq, index, value, clientRef), "UPDATE");
+    }
+
+    /**
+     * Captures the requests forwarded to a cohort and executes the normal write pipeline
+     * @param msg WRITE_FORWARD message (after a Write Request from a Client to a cohort replica is triggered)
+     */
+    private void onWriteForward(ProtocolMessages.WRITE_FORWARD msg) {
+        if(this.crashed) {
+            return;
+        }
+        debug("[COORDINATOR] RECV WRITE_FORWARD from " + getSender().path().name());
+        if(this.id==this.currentCoordinatorId) {
+            coordinatorWritePipeline(msg.index, msg.value, msg.clientRef);
+        }
+    }
+
+    /**
+     * Cohort validates update, insert it in the history and sends and ACK to coordinator
+     * @param msg UPDATE message (Notify an Update Request)
+     */
+    private void onUpdate(ProtocolMessages.UPDATE msg) {
+        verifyCrash(Crash.Type.Update);
+        if(this.crashed) {
+            return;
+        }
+        
+        debug("RECV UPDATE from " + getSender().path().name());
+        // TODO Deactive eventual WriteForwardTimeout active for this msg.index
+        this.history.add(new ProtocolMessages.UPDATE(msg.epoch, msg.seq, msg.index, msg.value, msg.clientRef));
+        ActorRef coordinatorRef=this.systemGroup.get(this.currentCoordinatorId);
+        if(coordinatorRef!=null) {
+            debug("UPDATE seq " + msg.seq + ", sending ACK to Coordinator " + this.currentCoordinatorId);
+            this.tell(new ProtocolMessages.ACK(msg.epoch, msg.seq, this.id), coordinatorRef);
+            // TODO Scheduler timeout waiting for WriteOK
+        }
+    }
+
+    /**
+     * Collects votes on leader and reached minor majority executes COMMIT
+     * @param msg ACK message (cohorts communicates to coordinator that is OK to COMMIT for itself)
+     */
+    private void onAck(ProtocolMessages.ACK msg) { 
+        if(this.crashed || this.id!=this.currentCoordinatorId) {
+            return;
+        }
+        if(!this.ackCounts.containsKey(msg.seq)) {
+            return;
+        }
+        int currentCount=this.ackCounts.getOrDefault(msg.seq, 0)+1;
+        this.ackCounts.put(msg.seq, currentCount);
+        int quorumThres=(this.systemGroup.size()/2)+1;
+        debug("[COORDINATOR] RECV ACK for seq " + msg.seq + " from " + getSender().path().name() + ". Current: " + currentCount+"/"+quorumThres);
+        if (currentCount==quorumThres) {
+            applyLocalUpdate(msg.epoch, msg.seq);
+            debug("[COORDINATOR] Quorum reached for seq " + msg.seq + ". Start Broadcast WRITE_OK");
+            broadcast(new ProtocolMessages.WRITE_OK(msg.epoch, msg.seq), "WRITE_OK");
+            this.ackCounts.remove(msg.seq);
+        }
+    }
+
+    /**
+     * Cohort receives notification of reached Quorum from leader and executes COMMIT of the state
+     * @param msg WRITE_OK message (commit signal that is ok to make the update of the value)
+     */
+    private void onWriteOk(ProtocolMessages.WRITE_OK msg) {
+        verifyCrash(Crash.Type.WriteOK);
+        if(this.crashed) {
+            return;
+        }
+        debug("RECV WRITE_OK for epoch " + msg.epoch + " and seq " + msg.seq + " from " + getSender().path().name());
+        // TODO Deactivate timeout waiting WriteOK
+        applyLocalUpdate(msg.epoch, msg.seq);
+    }
+
+    /**
+     * Must be invoked whenever this replica applies an update to its local state (after updating positions[])
+     * @param epoch state epoch reference
+     * @param seq state update monotonic number
+     */
+    private void applyLocalUpdate(int epoch, int seq) {
+        if(this.crashed) {
+            return;
+        }
+        boolean coordinator=false;
+        if(this.id==currentCoordinatorId) {
+            coordinator=true;
+        }
+        ProtocolMessages.UPDATE matchingUpdate=null;
+        for(ProtocolMessages.UPDATE u : this.history) {
+            if(u.epoch==epoch && u.seq==seq) {
+                matchingUpdate=u;
+                break;
+            }
+        }
+        if(matchingUpdate!=null) {
+            this.positions[matchingUpdate.index]=matchingUpdate.value;
+            if(coordinator) {
+                debug("[COORDINATOR] UPDATE TO BE APPLIED to positions [" + matchingUpdate.index + "]="+matchingUpdate.value);
+            }
+            else {
+                debug("UPDATE TO BE APPLIED to positions [" + matchingUpdate.index + "]="+matchingUpdate.value);
+            }
+            this.callbackOnUpdateApplied(epoch, seq, matchingUpdate.index, matchingUpdate.value, this.currentCoordinatorId);
+            if(matchingUpdate.clientRef!=null && matchingUpdate.clientRef!=getContext().getSystem().deadLetters()) {
+                this.tell(new ClientMessages.ReplyWrite(true, matchingUpdate.index, matchingUpdate.value, this.id), matchingUpdate.clientRef);
+            }
+        }
+        else {
+            if(coordinator) {
+                debug("[COORDINATOR] [WARNING] No match update found for seq " + seq);
+            }
+            else {
+                debug("[WARNING] No match update found for seq " + seq);
+            }
+        }
+    }
+
+    /**
+     * Helper sending serialized envelopes out to all cluster replicas excluding the self sender node
+     * @param msg Serialized message of any class being ClientMessages, ElectionMessages or ProtocolMessages
+     * @param type Type of string as identification, just for debug printout
+     */
+    private void broadcast(Serializable msg, String type) {
+        if(this.crashed) {
+            return;
+        }
+        boolean coordinator=false;
+        if(this.id==currentCoordinatorId) {
+            coordinator=true;
+        }
+        for(Map.Entry<Integer, ActorRef>  entry : this.systemGroup.entrySet()) {
+            if(entry.getKey()!=this.id) {
+                if(coordinator) {
+                    debug("[COORDINATOR] SEND " + type + " to Replica_" + entry.getKey());
+                }
+                else {
+                    debug("SEND " + type + " to Replica_" + entry.getKey());
+                }
+                this.tell(msg, entry.getValue());
+            }
+        }
+    }
+
+    //
+    // FAULT MODULE AND CRASH MANAGEMENT
+    //
+    /**
+     * Receives and memorizes instructions of test to simulate crash detection
+     */
+    @Override
+    public void crash(AbstractReplica.Crash how_to_crash) {
+        this.crashConfig=how_to_crash;
+        this.crashCounter=how_to_crash.after_n_messages_of_type;
+        debug("CRASH CONFIGURATION RECV: Type=" + how_to_crash.type + " Countdown=" + this.crashCounter);
+        if(how_to_crash.type==Crash.Type.Now) {
+            executeCrash();
+        }
+    }
+
+    /**
+     * Physically transitions the node actor layout into a total muted state, ignoring upcoming system msgs
+     */
+    void executeCrash() {
+        this.crashed=true;
+        log("CRASHED");
+        // TODO: Cancel active schedulers code
+        getContext().become(createBaseReceiveBuilder().build());
+    }
+
+    /**
+     * Evaluation gate checking message ingestion parameters. If type mirrors fault-injection instructions, it
+     * decreases countdown to trigger physical drop
+     * @param currentMessType Type of message received as a fault to verify the respective crash.
+     * These are:
+     *  - Now        Crash immediately.
+     *  - Heartbeat  Crash after processing heartbeat messages.
+     *  - Update     Crash after processing update messages.
+     *  - WriteOK    Crash after processing write acknowledgment messages.
+     *  - Election   Crash after processing election-related messages.
+     */
+    void verifyCrash(Crash.Type currentMessType) {
+        if(this.crashConfig!=null && this.crashConfig.type==currentMessType) {
+            this.crashCounter--;
+            debug("Crash countdown decremented for " + currentMessType + ". Remaining: " + this.crashCounter);
+            if(this.crashCounter<=0) {
+                executeCrash();
+            }
+        }
+    }
+
+    //
+    //  MODULE HEARTBEAT AND LEADER ELECTION
+    //
+    // TODO: HEARTBEAT TRIGGER FUNCTIONS, SENDING HEARTBEAT AND RECEIVING HEARTBEAT
+
+    // TODO: LEADER ELECTION ALGORITHM
 }
