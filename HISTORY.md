@@ -8,6 +8,13 @@
 - [x] Adjust log format of replicas and conversion to debug
 - [x] Comment out what implemented
 
+**Davide**
+- [x] Client: read/write requests, per-index reply matching and Scheduler-based timeouts
+- [x] Heartbeat: coordinator beats periodically; cohorts watch and start an election on timeout
+- [x] Leader Election: ring-based, token collects candidates, dead nodes skipped via ACK timeout; winner = highest (epoch, seq) then id
+- [x] Synchronization: winner opens a new epoch and broadcasts its history; followers align and resume monitoring
+- [x] Global election timer: restarts a stalled election (excluding the crashed candidate), fixing the infinite loop when the best candidate crashes mid-election
+
 ## DAY ONE (17/06)
 
 **Matteo**
