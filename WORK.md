@@ -14,6 +14,10 @@ Davide
 - [ ] **Synchronization** -> Reorder of the nodes after the election and broadcasting of the message
 
 Together
-- [ ] Debug
 - [ ] Report
-- [ ] Presentation + Demo (after 26/06)
+    - [ ] Project Structure - Project Files, how they are organized, were are the messages, which types...
+    - [ ] Design - State Machine, high-level description of the algorithm (primarly NORMAL_PATH and CRASH CASE)
+    - [ ] Implementation - Code implementation details with pseudocode
+    - [ ] Image of State Machine and Exchange of messages in both normal path and crash case
+- [ ] Presentation 
+- [ ] Demo
