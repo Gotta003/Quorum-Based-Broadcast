@@ -837,6 +837,10 @@ public class Replica extends AbstractReplica {
                 this.positions[u.index]=u.value;
                 callbackOnUpdateApplied(u.epoch, u.seq, u.index, u.value, this.currentCoordinatorId);
             }
+            else {
+                this.positions[u.index]=u.value;
+                callbackOnUpdateApplied(u.epoch, u.seq, u.index, u.value, this.currentCoordinatorId);
+            }
         }
         if(this.id!=this.currentCoordinatorId) {
             this.epoch=maxEpochInSync+1;
@@ -868,9 +872,9 @@ public class Replica extends AbstractReplica {
                 return true;
             }
             //Case leader changes if there is still an update
-            if(this.id!=this.currentCoordinatorId && u.epoch==this.epoch && u.seq==this.seq) { 
+            /*if(this.id!=this.currentCoordinatorId && u.epoch==this.epoch && u.seq==this.seq) { 
                 return true;
-            }
+            }*/
         }
         return false;
     }

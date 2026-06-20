@@ -42,44 +42,7 @@ public class Main {
             e.printStackTrace();
         }
         //BOMBING
-        new Thread(()->{
-            replicas.get(1).tell(new ClientMessages.ClientWrite(0, 100), ActorRef.noSender());
-        }).start();
-        new Thread(()->{
-            replicas.get(3).tell(new ClientMessages.ClientWrite(0, 200), ActorRef.noSender());
-        }).start();
-        new Thread(()->{
-            replicas.get(2).tell(new ClientMessages.ClientWrite(1, 300), ActorRef.noSender());
-        }).start();
-        try{
-            Thread.sleep(5000);
-        }
-        catch(InterruptedException e) {}
-        /*System.out.println("\n[TEST] Simulate Client writing value 42 at index 0 via replica 2...");
-        ClientMessages.ClientWrite fakeWrite1=new ClientMessages.ClientWrite(0, 42);
-        ClientMessages.ClientWrite fakeWrite2=new ClientMessages.ClientWrite(1, 57);
-        replicas.get(2).tell(fakeWrite1, ActorRef.noSender());
-        replicas.get(4).tell(fakeWrite2, ActorRef.noSender());
-        try {
-            Thread.sleep(3000);
-        }
-        catch(InterruptedException e) {
-            e.printStackTrace();
-        }*/
-        //SIMULATE READ
-        System.out.println("\n[TEST] Simulating Client reading index 0 from all replicas");
-        ClientMessages.ClientRead fakeRead1=new ClientMessages.ClientRead(0);
-        ClientMessages.ClientRead fakeRead2=new ClientMessages.ClientRead(1);
-        replicas.get(0).tell(fakeRead1, ActorRef.noSender());
-        replicas.get(1).tell(fakeRead2, ActorRef.noSender());
-        try {
-            Thread.sleep(1000);
-        }
-        catch(InterruptedException e) {}
 
-        // TODO: Create your clients
-        
-        // TODO: Implement your main logic
 
         system.terminate();
 
