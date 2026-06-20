@@ -23,7 +23,7 @@ import scala.concurrent.duration.Duration;
  * never keep more than one in-flight read and one in-flight write per index, so
  * a per-index map is enough to correlate a reply with its pending timer.
  *
- * The replyy Id carried bReplyRead/ReplyWrite is used as the "fromReplica" of
+ * The reply Id carried bReplyRead/ReplyWrite is used as the "fromReplica" of
  * the result (it may differ from the contacted replica, e.g. when the write is
  * answered by the coordinator), while the contacted replica ref is the one
  * reported in the timeout (it is the actor the client actually talked to).
@@ -68,7 +68,7 @@ public class Client extends AbstractClient {
         Cancellable timer = scheduleOnce(getReadTimeoutDelay(),
                 new AbstractClient.ReadTimeout(getSelf(), replica, index));
         pendingReads.put(index, timer);
-        debug("READ sent to " + replica.path().name() + " (index=" + index + ")");
+        log("requesting READ (" + index + ") to " + replica.path().name());
     }
 
     @Override
@@ -81,7 +81,7 @@ public class Client extends AbstractClient {
         Cancellable timer = scheduleOnce(getWriteTimeoutDelay(),
                 new AbstractClient.WriteTimeout(getSelf(), replica, index, value));
         pendingWrites.put(index, timer);
-        debug("WRITE sent to " + replica.path().name() + " (index=" + index + ", value=" + value + ")");
+        log("requesting WRITE (" + index + ", " + value + ") to " + replica.path().name());
     }
 
     private void onReplyRead(ClientMessages.ReplyRead msg) {
