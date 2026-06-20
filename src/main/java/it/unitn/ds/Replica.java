@@ -54,6 +54,8 @@ public class Replica extends AbstractReplica {
     private Cancellable electionAckTimer;
     private Map<Integer, ProtocolMessages.UPDATE> pendingElectionToken;
     private Cancellable electionGlobalTimer;
+    private WriteForwardTimeout writeAfterElection=null;
+    private final Map<Integer, ActorRef> locallyContactedWrites=new HashMap<>();
 
     //
     //  CONSTRUCTORS & PROPS
@@ -193,6 +195,7 @@ public class Replica extends AbstractReplica {
                 .match(ProtocolMessages.UPDATE.class, this::onUpdate)
                 .match(ProtocolMessages.ACK.class, this::onAck)
                 .match(ProtocolMessages.WRITE_OK.class, this::onWriteOk)
+                .match(WriteForwardTimeout.class, this::onWriteForwardTimeout)
                 .match(Heartbeat.class, this::onHeartbeat)
                 .match(HeartbeatTick.class, this::onHeartbeatTick)
                 .match(HeartbeatTimeoutCheck.class, this::onHeartbeatTimeoutCheck)
@@ -226,10 +229,11 @@ public class Replica extends AbstractReplica {
      * @param msg ClientWrite Message (Request of writing coming from a client)
      */
     private void onClientWrite(ClientMessages.ClientWrite msg) {
-        if(this.crashed) {
+        if(this.crashed || this.electing) {
             return;
         }
         debug("RECV WRITE_REQUEST from Client " + msg.index);
+        this.locallyContactedWrites.put(msg.index, getSender());
         if(this.id!=this.currentCoordinatorId) {
             writeForwardToCoordinator(msg.index, msg.value, getSender());
             return;
@@ -248,8 +252,8 @@ public class Replica extends AbstractReplica {
         if(coordinatorRef!=null) {
             debug("WRITE_FORWARD to Coordinator " + this.currentCoordinatorId);
             this.tell(new ProtocolMessages.WRITE_FORWARD(index, value, clientRef), coordinatorRef);
-            // TODO Implement timeout write forward
-            //getContext().getSystem().scheduler().scheduleOnce(...)
+            long timeoutDelay=3*getMaxLatencyPlusTolerance();
+            scheduleOnceSelf(timeoutDelay, new WriteForwardTimeout(index, value, clientRef));
         }
     }
 
@@ -272,11 +276,34 @@ public class Replica extends AbstractReplica {
     }
 
     /**
+     * Handler triggered if coordinator fails to broadcast UPDATE message within max latency 
+     * window after FORWARD request
+     * @param msg WRITE_FORWARD message (after a Write Request from a Client to a cohort replica is triggered)
+     */
+    private void onWriteForwardTimeout(WriteForwardTimeout msg) {
+        if(this.crashed || this.electing) {
+            return;
+        }
+        boolean updateReceived=false;
+        for(ProtocolMessages.UPDATE u : this.history) {
+            if(u.epoch==this.epoch && u.index==msg.index && u.value==msg.value) {
+                updateReceived=true;
+                break;
+            }
+        }
+        if(!updateReceived) {
+            debug("WRITE_FORWARD timeout triggered for index " + msg.index + ". Stop Coordinator " + this.currentCoordinatorId);
+            this.writeAfterElection=msg;
+            startElection(this.currentCoordinatorId);
+        }
+    }
+
+    /**
      * Captures the requests forwarded to a cohort and executes the normal write pipeline
      * @param msg WRITE_FORWARD message (after a Write Request from a Client to a cohort replica is triggered)
      */
     private void onWriteForward(ProtocolMessages.WRITE_FORWARD msg) {
-        if(this.crashed) {
+        if(this.crashed || this.electing) {
             return;
         }
         debug("[COORDINATOR] RECV WRITE_FORWARD from " + getSender().path().name());
@@ -296,13 +323,13 @@ public class Replica extends AbstractReplica {
         }
         
         debug("RECV UPDATE from " + getSender().path().name());
-        // TODO Deactive eventual WriteForwardTimeout active for this msg.index
         this.history.add(new ProtocolMessages.UPDATE(msg.epoch, msg.seq, msg.index, msg.value, msg.clientRef));
         ActorRef coordinatorRef=this.systemGroup.get(this.currentCoordinatorId);
         if(coordinatorRef!=null) {
             debug("UPDATE seq " + msg.seq + ", sending ACK to Coordinator " + this.currentCoordinatorId);
             this.tell(new ProtocolMessages.ACK(msg.epoch, msg.seq, this.id), coordinatorRef);
-            // TODO Scheduler timeout waiting for WriteOK
+            long timeoutDelay=2*getMaxLatencyPlusTolerance();
+            scheduleOnceSelf(timeoutDelay, new SyncTimeout());
         }
     }
 
@@ -339,7 +366,6 @@ public class Replica extends AbstractReplica {
             return;
         }
         debug("RECV WRITE_OK for epoch " + msg.epoch + " and seq " + msg.seq + " from " + getSender().path().name());
-        // TODO Deactivate timeout waiting WriteOK
         applyLocalUpdate(msg.epoch, msg.seq);
     }
 
@@ -372,8 +398,9 @@ public class Replica extends AbstractReplica {
                 debug("UPDATE TO BE APPLIED to positions [" + matchingUpdate.index + "]="+matchingUpdate.value);
             }
             this.callbackOnUpdateApplied(epoch, seq, matchingUpdate.index, matchingUpdate.value, this.currentCoordinatorId);
-            if(matchingUpdate.clientRef!=null && matchingUpdate.clientRef!=getContext().getSystem().deadLetters()) {
-                this.tell(new ClientMessages.ReplyWrite(true, matchingUpdate.index, matchingUpdate.value, this.id), matchingUpdate.clientRef);
+            if(this.locallyContactedWrites.containsKey(matchingUpdate.index)) {
+                ActorRef client=this.locallyContactedWrites.remove(matchingUpdate.index);
+                this.tell(new ClientMessages.ReplyWrite(true, matchingUpdate.index, matchingUpdate.value, this.id), client);
             }
         }
         else {
@@ -627,15 +654,23 @@ public class Replica extends AbstractReplica {
      * in the previous attempt stay in {@code suspectedCrashed}, so a crashed best-candidate is excluded on retry.
      */
     private void onSyncTimeout(SyncTimeout msg) {
-        if(this.crashed || !this.electing) {
+        if(this.crashed) {
             return;
         }
-        log("ELECTION timed out without SYNCHRONIZATION, restarting");
-        this.electing=false;
-        this.electionAckExpectedFrom=-1;
-        cancelTimer(this.electionAckTimer); this.electionAckTimer=null;
-        this.pendingElectionToken=null;
-        startElectionInternal(this.currentCoordinatorId, false);
+        if(this.electing) {
+            log("ELECTION timed out without SYNCHRONIZATION, restarting");
+            this.electing=false;
+            this.electionAckExpectedFrom=-1;
+            cancelTimer(this.electionAckTimer); this.electionAckTimer=null;
+            this.pendingElectionToken=null;
+            startElectionInternal(this.currentCoordinatorId, false);
+            return;
+        }
+        ProtocolMessages.UPDATE last=latestUpdate();
+        if(last!=null && this.positions[last.index]!=last.value) {
+            debug("WRITE_OK timeout for seq " + last.seq + ". Coordinator Stop " + this.currentCoordinatorId);
+            startElection(this.currentCoordinatorId);
+        }
     }
 
     /**
@@ -776,6 +811,7 @@ public class Replica extends AbstractReplica {
         callbackOnCoordinatorElected(this.id);
         broadcast(new ElectionMessages.SYNCHRONIZATION(this.id, new ArrayList<>(this.history)), "SYNCHRONIZATION");
         startHeartbeatSender();
+        recoverPendingWrite();
     }
 
     /**
@@ -790,15 +826,29 @@ public class Replica extends AbstractReplica {
         this.suspectedCrashed.clear();
         this.currentCoordinatorId=msg.newCoordinatorId;
         debug("RECV SYNCHRONIZATION, new coordinator is " + msg.newCoordinatorId);
+        //Missing max epoch update
+        int maxEpochInSync=0;  
         for(ProtocolMessages.UPDATE u : msg.missingUpdates) {
+            if(u.epoch>maxEpochInSync) {
+                maxEpochInSync=u.epoch;
+            }
             if(!historyContains(u.epoch, u.seq)) {
                 this.history.add(new ProtocolMessages.UPDATE(u.epoch, u.seq, u.index, u.value, null));
                 this.positions[u.index]=u.value;
                 callbackOnUpdateApplied(u.epoch, u.seq, u.index, u.value, this.currentCoordinatorId);
             }
+            else {
+                this.positions[u.index]=u.value;
+                callbackOnUpdateApplied(u.epoch, u.seq, u.index, u.value, this.currentCoordinatorId);
+            }
         }
+        if(this.id!=this.currentCoordinatorId) {
+            this.epoch=maxEpochInSync+1;
+        }
+        this.seq=0;
         callbackOnCoordinatorElected(msg.newCoordinatorId);
         armHeartbeatMonitor();
+        recoverPendingWrite();
     }
 
     /**
@@ -821,7 +871,29 @@ public class Replica extends AbstractReplica {
             if(u.epoch==epoch && u.seq==seq) {
                 return true;
             }
+            //Case leader changes if there is still an update
+            /*if(this.id!=this.currentCoordinatorId && u.epoch==this.epoch && u.seq==this.seq) { 
+                return true;
+            }*/
         }
         return false;
+    }
+
+    /**
+     * Helper pending write to be issued after election
+     */
+    private void recoverPendingWrite() {
+        if(this.writeAfterElection!=null) {
+            WriteForwardTimeout pending=this.writeAfterElection;
+            this.writeAfterElection=null;
+            debug("Re-submit pending write for index " + pending.index + " to new coordinator " + this.currentCoordinatorId);
+            this.locallyContactedWrites.put(pending.index, pending.clientRef);
+            if(this.id==this.currentCoordinatorId) {
+                coordinatorWritePipeline(pending.index, pending.value, pending.clientRef);
+            }
+            else {
+                writeForwardToCoordinator(pending.index, pending.value, pending.clientRef);
+            }
+        }
     }
 }
