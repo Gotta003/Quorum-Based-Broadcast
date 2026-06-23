@@ -839,7 +839,15 @@ public class Replica extends AbstractReplica {
             }
             else {
                 this.positions[u.index]=u.value;
-                callbackOnUpdateApplied(u.epoch, u.seq, u.index, u.value, this.currentCoordinatorId);
+                boolean alreadyCalled=false;
+                for(ProtocolMessages.UPDATE localU :this.history) {
+                    if(localU.epoch==u.epoch && localU.seq==u.seq && this.currentCoordinatorId==msg.newCoordinatorId) {
+                        alreadyCalled=true;
+                    }
+                }
+                if(!alreadyCalled && this.id!=msg.newCoordinatorId) {
+                    callbackOnUpdateApplied(u.epoch, u.seq, u.index, u.value, this.currentCoordinatorId);
+                }
             }
         }
         if(this.id!=this.currentCoordinatorId) {
