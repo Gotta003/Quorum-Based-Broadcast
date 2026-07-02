@@ -125,6 +125,7 @@ public class Client extends AbstractClient {
                 .match(ClientMessages.ReplyWrite.class, this::onReplyWrite)
                 .match(AbstractClient.ReadTimeout.class, this::onReadTimeout)
                 .match(AbstractClient.WriteTimeout.class, this::onWriteTimeout)
+                .match(DemoScenarios.SendWriteCommand.class, cmd->sendWrite(cmd.targetReplica, cmd.index, cmd.value))
                 .build();
     }
 

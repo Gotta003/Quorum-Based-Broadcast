@@ -9,8 +9,12 @@ import it.unitn.ds.AbstractReplica.InitSystem;
 
 public class Main {
     public static void main(String[] args) {
+        String mode="normal";
+        if(args.length>0) {
+            mode=args[0].toLowerCase();
+        }
         System.out.println("========================================");
-        System.out.println("START");
+        System.out.println("START MODE " + mode.toUpperCase());
         System.out.println("========================================\n");
 
         final int N_REPLICAS = 6;
@@ -18,36 +22,26 @@ public class Main {
         final ActorSystem system = ActorSystem.create("TestMain");
 
         Logger.setDestinationStdout();
-        Logger.setDebugEnabled(true);
+        Logger.setDebugEnabled(false);
 
-        Map<Integer, ActorRef> replicas = new HashMap<>(N_REPLICAS);
-        for (int i = 0; i < N_REPLICAS; i++) {
-            replicas.put(i,
-                system.actorOf(
-                    Replica.props(i, AbstractReplica.MIN_LATENCY, AbstractReplica.MAX_LATENCY, AbstractReplica.COORDINATOR_BEAT_INTERVAL),
-                    "Replica_" + i
-                )
-            );
+        switch(mode) {
+            case "normal":
+                DemoScenarios.runNormalPathDemo(system, N_REPLICAS, COORDINATOR_ID);
+                break;
+            case "bomb":
+                DemoScenarios.runWriteBombingDemo(system, N_REPLICAS, COORDINATOR_ID);
+                break;
+            default:
+                System.out.println("[ERROR] Mode " + mode + " not implemented.");
+                System.out.println("Use one of the following: ['normal', 'bomb', ...]");
+                break;
         }
-
-        InitSystem initMsg = new InitSystem(replicas, COORDINATOR_ID);
-        for (Map.Entry<Integer, ActorRef> entry : replicas.entrySet()) {
-            entry.getValue().tell(initMsg, ActorRef.noSender());
-        }
-        //SIMULATE WRITE PIPELINE
-        try {
-            Thread.sleep(1000);
-        }
-        catch(InterruptedException e) {
-            e.printStackTrace();
-        }
-        //BOMBING
 
 
         system.terminate();
 
         System.out.println("\n========================================");
-        System.out.println("END");
+        System.out.println("END DEMO");
         System.out.println("========================================\n");
     }
 

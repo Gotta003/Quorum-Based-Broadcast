@@ -7,6 +7,12 @@ application {
     mainClass = "it.unitn.ds.Main"
 }
 
+tasks.named('run', JavaExec) {
+    if(project.hasProperty('args')) {
+        args project.getProperty('args').split()
+    }
+}
+
 repositories {
     mavenCentral()
     mavenLocal()

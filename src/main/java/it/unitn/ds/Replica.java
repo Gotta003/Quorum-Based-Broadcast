@@ -204,6 +204,14 @@ public class Replica extends AbstractReplica {
                 .match(ElectionAckTimeout.class, this::onElectionAckTimeout)
                 .match(ElectionMessages.SYNCHRONIZATION.class, this::onSynchronization)
                 .match(SyncTimeout.class, this::onSyncTimeout)
+                .match(DemoMessages.DumpStateRequest.class, msg-> {
+                    if(this.crashed) {
+                        getSender().tell(new DemoMessages.ReplicaStateReply(this.id, true, false, -1, new int[0], 0), getSelf());
+                    }
+                    else {
+                        getSender().tell(new DemoMessages.ReplicaStateReply(this.id, this.crashed, this.electing, this.currentCoordinatorId, this.positions.clone(), this.history.size()), getSelf());
+                    }
+                })
                 .build();
     }
 
