@@ -101,6 +101,151 @@ public class DemoScenarios {
         printClusterSnapshot(system, replicas);
     }
 
+    //DEMO 2
+    public static void runCoordinatorCrashElectionDemo(ActorSystem system, int nReplicas, int coordinatorId) {
+        System.out.println("\nCoordinator Crash + Ring Election Demo\n");
+        Map<Integer, ActorRef> replicas=setupCluster(system, nReplicas, coordinatorId);
+        ActorRef client=system.actorOf(Client.props(READ_TIMEOUT, WRITE_TIMEOUT, Optional.empty()), "DemoClient_Election");
+
+        System.out.println("[DEMO] Client writes (Idx: 0, Value: 1) to Replica_" + coordinatorId + " to build history");
+        client.tell(new SendWriteCommand(replicas.get(coordinatorId), 0, 1), ActorRef.noSender());
+        try {
+            Thread.sleep(2000);
+        }
+        catch(InterruptedException e) {
+            e.printStackTrace();
+        }
+        printClusterSnapshot(system, replicas);
+
+        System.out.println("[DEMO] Crashing coordinator Replica_" + coordinatorId + " immediately");
+        replicas.get(coordinatorId).tell(new AbstractReplica.Crash(AbstractReplica.Crash.Type.Now, 0), ActorRef.noSender());
+        System.out.println("[DEMO] Waiting for heartbeat timeout detection and ring election to complete...");
+        try {
+            Thread.sleep(4000);
+        }
+        catch(InterruptedException e) {
+            e.printStackTrace();
+        }
+        printClusterSnapshot(system, replicas);
+
+        int lastNode=nReplicas-1;
+        System.out.println("[DEMO] Client writes (Idx: 0, Value: 2) to Replica_" + lastNode + " to verify the new coordinator serves requests");
+        client.tell(new SendWriteCommand(replicas.get(lastNode), 0, 2), ActorRef.noSender());
+        try {
+            Thread.sleep(2000);
+        }
+        catch(InterruptedException e) {
+            e.printStackTrace();
+        }
+        printClusterSnapshot(system, replicas);
+    }
+
+    //DEMO 3
+    public static void runCrashDuringElectionDemo(ActorSystem system, int nReplicas, int coordinatorId) {
+        System.out.println("\nCrash During Election Demo\n");
+        Map<Integer, ActorRef> replicas=setupCluster(system, nReplicas, coordinatorId);
+        ActorRef client=system.actorOf(Client.props(READ_TIMEOUT, WRITE_TIMEOUT, Optional.empty()), "DemoClient_CrashElection");
+
+        System.out.println("[DEMO] Client writes (Idx: 0, Value: 1) to Replica_" + coordinatorId + " to differentiate node histories");
+        client.tell(new SendWriteCommand(replicas.get(coordinatorId), 0, 1), ActorRef.noSender());
+        try {
+            Thread.sleep(2000);
+        }
+        catch(InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        System.out.println("[DEMO] Crashing coordinator Replica_" + coordinatorId + " immediately");
+        replicas.get(coordinatorId).tell(new AbstractReplica.Crash(AbstractReplica.Crash.Type.Now, 0), ActorRef.noSender());
+
+        int highestNode=nReplicas-1;
+        System.out.println("[DEMO] Arming Replica_" + highestNode + " to crash after receiving 1 ELECTION message");
+        replicas.get(highestNode).tell(new AbstractReplica.Crash(AbstractReplica.Crash.Type.Election, 1), ActorRef.noSender());
+
+        System.out.println("[DEMO] Waiting for the ring to skip the crashed node and the election to resolve...");
+        try {
+            Thread.sleep(6000);
+        }
+        catch(InterruptedException e) {
+            e.printStackTrace();
+        }
+        printClusterSnapshot(system, replicas);
+
+        int targetNode=nReplicas-2;
+        System.out.println("[DEMO] Client writes (Idx: 0, Value: 99) to Replica_" + targetNode + " to prove the system recovered");
+        client.tell(new SendWriteCommand(replicas.get(targetNode), 0, 99), ActorRef.noSender());
+        try {
+            Thread.sleep(2000);
+        }
+        catch(InterruptedException e) {
+            e.printStackTrace();
+        }
+        printClusterSnapshot(system, replicas);
+    }
+
+    //DEMO 4
+    public static void runWinnerCrashesDuringElectionDemo(ActorSystem system, int nReplicas, int coordinatorId) {
+        System.out.println("\nWinner Crashes During Election Demo\n");
+        Map<Integer, ActorRef> replicas=setupCluster(system, nReplicas, coordinatorId);
+        int winnerCandidate=nReplicas-1;
+        int secondBest=nReplicas-2;
+        ActorRef client=system.actorOf(Client.props(READ_TIMEOUT, WRITE_TIMEOUT, Optional.empty()), "DemoClient_WinnerCrash");
+
+        System.out.println("[DEMO] Committing three writes to build a shared history on all replicas");
+        int[] values={1,2,3};
+        for(int v : values) {
+            client.tell(new SendWriteCommand(replicas.get(coordinatorId), 0, v), ActorRef.noSender());
+            try { Thread.sleep(1000); } catch(InterruptedException e) { e.printStackTrace(); }
+        }
+        printClusterSnapshot(system, replicas);
+
+        System.out.println("[DEMO] Crashing coordinator Replica_" + coordinatorId + " immediately");
+        replicas.get(coordinatorId).tell(new AbstractReplica.Crash(AbstractReplica.Crash.Type.Now, 0), ActorRef.noSender());
+
+        System.out.println("[DEMO] Arming Replica_" + winnerCandidate + " (the winner) to crash on its 2nd ELECTION message");
+        replicas.get(winnerCandidate).tell(new AbstractReplica.Crash(AbstractReplica.Crash.Type.Election, 2), ActorRef.noSender());
+
+        System.out.println("[DEMO] Waiting for the global stall timer to exclude the dead winner and elect the runner-up...");
+        try { Thread.sleep(10000); } catch(InterruptedException e) { e.printStackTrace(); }
+        printClusterSnapshot(system, replicas);
+
+        System.out.println("[DEMO] Client writes (Idx: 0, Value: 99) to Replica_" + secondBest + " to prove the runner-up took over");
+        client.tell(new SendWriteCommand(replicas.get(secondBest), 0, 99), ActorRef.noSender());
+        try { Thread.sleep(2000); } catch(InterruptedException e) { e.printStackTrace(); }
+        printClusterSnapshot(system, replicas);
+    }
+
+    // DEMO 5
+    public static void runUniformAgreementDemo(ActorSystem system, int nReplicas, int coordinatorId) {
+        System.out.println("\nUniform Agreement Demo\n");
+        Map<Integer, ActorRef> replicas=setupCluster(system, nReplicas, coordinatorId);
+        ActorRef client=system.actorOf(Client.props(READ_TIMEOUT, WRITE_TIMEOUT, Optional.empty()), "DemoClient_UniformAgreement");
+
+        System.out.println("[DEMO] Baseline write (Idx: 0, Value: 10)");
+        client.tell(new SendWriteCommand(replicas.get(coordinatorId), 0, 10), ActorRef.noSender());
+        try { Thread.sleep(2000); } catch(InterruptedException e) { e.printStackTrace(); }
+
+        System.out.println("[DEMO] Second write (Idx: 0, Value: 42)");
+        client.tell(new SendWriteCommand(replicas.get(coordinatorId), 0, 42), ActorRef.noSender());
+        try { Thread.sleep(2000); } catch(InterruptedException e) { e.printStackTrace(); }
+        printClusterSnapshot(system, replicas);
+
+        System.out.println("[DEMO] Crashing coordinator Replica_" + coordinatorId);
+        replicas.get(coordinatorId).tell(new AbstractReplica.Crash(AbstractReplica.Crash.Type.Now, 0), ActorRef.noSender());
+
+        System.out.println("[DEMO] Waiting for election + synchronization...");
+        try { Thread.sleep(6000); } catch(InterruptedException e) { e.printStackTrace(); }
+        printClusterSnapshot(system, replicas);
+
+        System.out.println("[DEMO] All survivors must show identical Positions + History Size (agreement preserved across leadership change).");
+
+        int probe=(coordinatorId+1)%nReplicas;
+        System.out.println("[DEMO] Follow-up write to confirm the new coordinator serves requests");
+        client.tell(new SendWriteCommand(replicas.get(probe), 1, 7), ActorRef.noSender());
+        try { Thread.sleep(2000); } catch(InterruptedException e) { e.printStackTrace(); }
+        printClusterSnapshot(system, replicas);
+    }
+
     public static class SendWriteCommand {
         public final ActorRef targetReplica;
         public final int index;

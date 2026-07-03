@@ -17,7 +17,7 @@ public class Main {
         System.out.println("START MODE " + mode.toUpperCase());
         System.out.println("========================================\n");
 
-        final int N_REPLICAS = 6;
+        final int N_REPLICAS = 5;
         final int COORDINATOR_ID = 2;
         final ActorSystem system = ActorSystem.create("TestMain");
 
@@ -31,9 +31,21 @@ public class Main {
             case "bomb":
                 DemoScenarios.runWriteBombingDemo(system, N_REPLICAS, COORDINATOR_ID);
                 break;
+            case "election":
+                DemoScenarios.runCoordinatorCrashElectionDemo(system, N_REPLICAS, COORDINATOR_ID);
+                break;
+            case "crash-election":
+                DemoScenarios.runCrashDuringElectionDemo(system, N_REPLICAS, COORDINATOR_ID);
+                break;
+            case "winner-crash":
+                DemoScenarios.runWinnerCrashesDuringElectionDemo(system, N_REPLICAS, COORDINATOR_ID);
+                break;
+            case "uniform-agreement":
+                DemoScenarios.runUniformAgreementDemo(system, N_REPLICAS, COORDINATOR_ID);
+                break;
             default:
                 System.out.println("[ERROR] Mode " + mode + " not implemented.");
-                System.out.println("Use one of the following: ['normal', 'bomb', ...]");
+                System.out.println("Use one of the following: ['normal', 'bomb', 'election', 'crash-election', 'winner-crash', 'uniform-agreement']");
                 break;
         }
 
