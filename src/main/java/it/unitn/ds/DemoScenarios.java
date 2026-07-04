@@ -59,6 +59,7 @@ public class DemoScenarios {
         printClusterSnapshot(system, replicas);
     }
 
+    //DEMO 2
     public static void runWriteBombingDemo(ActorSystem system, int nReplicas, int coordinatorId) {
         System.out.println("\nWrite Bombing with multiple clients\n");
         Map<Integer, ActorRef> replicas=setupCluster(system, nReplicas, coordinatorId);
@@ -101,7 +102,7 @@ public class DemoScenarios {
         printClusterSnapshot(system, replicas);
     }
 
-    //DEMO 2
+    //DEMO 3
     public static void runCoordinatorCrashElectionDemo(ActorSystem system, int nReplicas, int coordinatorId) {
         System.out.println("\nCoordinator Crash + Ring Election Demo\n");
         Map<Integer, ActorRef> replicas=setupCluster(system, nReplicas, coordinatorId);
@@ -140,7 +141,7 @@ public class DemoScenarios {
         printClusterSnapshot(system, replicas);
     }
 
-    //DEMO 3
+    //DEMO 4
     public static void runCrashDuringElectionDemo(ActorSystem system, int nReplicas, int coordinatorId) {
         System.out.println("\nCrash During Election Demo\n");
         Map<Integer, ActorRef> replicas=setupCluster(system, nReplicas, coordinatorId);
@@ -183,7 +184,7 @@ public class DemoScenarios {
         printClusterSnapshot(system, replicas);
     }
 
-    //DEMO 4
+    //DEMO 5
     public static void runWinnerCrashesDuringElectionDemo(ActorSystem system, int nReplicas, int coordinatorId) {
         System.out.println("\nWinner Crashes During Election Demo\n");
         Map<Integer, ActorRef> replicas=setupCluster(system, nReplicas, coordinatorId);

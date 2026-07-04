@@ -22,7 +22,7 @@ public class Main {
         final ActorSystem system = ActorSystem.create("TestMain");
 
         Logger.setDestinationStdout();
-        Logger.setDebugEnabled(false);
+        Logger.setDebugEnabled(true);
 
         switch(mode) {
             case "normal":
